@@ -1,4 +1,13 @@
 // Package app implements an interface to send the message based on HTTP.
+//
+// The package registers two urls by default: "/v1/email" and "/v1/sms".
+// You can use them to send the email or the sms message. Both two apis support
+// the POST method, not GET, which can be enabled by setting `Config.AllowGet`
+// to true.
+//
+// For POST, the argument is in body, type of which is "application/json".
+// Email needs "subject", "content", "to", "attachments", "provider", and SMS
+// needs "phone", "content", "provider".
 package app
 
 import (
