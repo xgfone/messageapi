@@ -14,15 +14,14 @@ For the invariable arguments each time to call the send interface, you should re
 1. Implement the interface `Email`, that's, the two methods:
 ```go
 Load(map[string]string) error
-SendEmail(cxt context.Context, to []string, subject, content string,
-    attachments map[string]io.Reader) error
+SendEmail(context.Context, []string, string, string, map[string]io.Reader) error
 ```
 2. Register the plugin with a name by the function `RegisterEmail`:
 ```go
 RegisterEmail(pluginName, EmailPlugin)
 ```
 
-By default, the api implements and registers the `plain` provider, which need the configuration options: `host`, `port`, `username`, `password`, `from`.
+By default, the api implements and registers the `plain` provider, which needs to `Load` the configuration options: `host`, `port`, `username`, `password`, `from`.
 
 ### For SMS
 
