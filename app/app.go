@@ -39,6 +39,9 @@ type Config struct {
 	// The default is false.
 	AllowGet bool `json:"allow_get"`
 
+	// if true, don't report an error when not support the given provider.
+	IgnoreNotSupportedProvider bool `json:"ignore_not_supported_provider"`
+
 	// The name of the default sms provider, which is used when it is not given
 	// in the request. It's best to give a default provider.
 	DefaultSMSProvider string `json:"default_sms_provider,omitempty"`
@@ -171,6 +174,9 @@ func ResetConfig(conf *Config) error {
 	for n, c := range conf.Emails {
 		provider := messageapi.GetEmail(n)
 		if provider == nil {
+			if conf.IgnoreNotSupportedProvider {
+				continue
+			}
 			return fmt.Errorf("have no the email provider[%s]", n)
 		}
 
@@ -184,6 +190,9 @@ func ResetConfig(conf *Config) error {
 	for n, c := range conf.SMSes {
 		provider := messageapi.GetSMS(n)
 		if provider == nil {
+			if conf.IgnoreNotSupportedProvider {
+				continue
+			}
 			return fmt.Errorf("have no the sms provider[%s]", n)
 		}
 
@@ -256,6 +265,15 @@ func resetConfig(w http.ResponseWriter, r *http.Request) {
 			} else {
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte("the type of allow_get is wrong"))
+				return
+			}
+		}
+		if _v, ok := _conf["ignore_not_supported_provider"]; ok {
+			if v, ok := _v.(bool); ok {
+				conf.IgnoreNotSupportedProvider = v
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("the type of ignore_not_supported_provider is wrong"))
 				return
 			}
 		}
