@@ -9,6 +9,8 @@
 // Email needs "subject", "content", "to", "attachments", "provider", and SMS
 // needs "phone", "content", "provider". Thereinto, "content", "attachments",
 // and "provider" are optional. In most cases, there is no need to use "provider".
+// You maybe only use it when there are more than one provider and you want to
+// use the specific one.
 //
 // For GET, the arguments above are in the url query, but not "attachments".
 package app
@@ -33,11 +35,11 @@ type Config struct {
 	AllowGet bool
 
 	// The name of the default sms provider, which is used when it is not given
-	// in the request.
+	// in the request. It's best to give a default provider.
 	DefaultSMSProvider string
 
 	// The name of the default email provider, which is used when it is not given
-	// in the request.
+	// in the request. It's best to give a default provider.
 	DefaultEmailProvider string
 
 	// The configuration of all the email providers. The key is the name of the
