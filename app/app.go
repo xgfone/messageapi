@@ -154,6 +154,8 @@ func init() {
 }
 
 // ResetConfig resets the global default configuration.
+//
+// Only use this function when you don't call Start and implement it youself.
 func ResetConfig(conf *Config) error {
 	_emails := make(map[string]messageapi.Email)
 	for n, c := range conf.Emails {
