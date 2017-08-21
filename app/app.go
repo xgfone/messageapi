@@ -62,7 +62,7 @@ func NewDefaultConfig() *Config {
 //
 // If certFile and keyFile are not empty, it will start the app with TLS.
 func Start(c *Config, addr, certFile, keyFile string) error {
-	if err := resetConfig(c); err != nil {
+	if err := ResetConfig(c); err != nil {
 		return err
 	}
 
@@ -146,12 +146,13 @@ func (s *smsRequest) Validate() error {
 }
 
 func init() {
-	resetConfig(NewDefaultConfig())
+	ResetConfig(NewDefaultConfig())
 	http.HandleFunc("/v1/email", sendEmail)
 	http.HandleFunc("/v1/sms", sendSMS)
 }
 
-func resetConfig(conf *Config) error {
+// ResetConfig resets the global default configuration.
+func ResetConfig(conf *Config) error {
 	_emails := make(map[string]messageapi.Email)
 	for n, c := range conf.Emails {
 		provider := messageapi.GetEmail(n)
