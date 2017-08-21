@@ -5,9 +5,12 @@
 // the POST method, not GET, which can be enabled by setting `Config.AllowGet`
 // to true.
 //
-// For POST, the argument is in body, type of which is "application/json".
+// For POST, the arguments are in body, type of which is "application/json".
 // Email needs "subject", "content", "to", "attachments", "provider", and SMS
-// needs "phone", "content", "provider".
+// needs "phone", "content", "provider". Thereinto, "content", "attachments",
+// and "provider" are optional. In most cases, there is no need to use "provider".
+//
+// For GET, the arguments above are in the url query, but not "attachments".
 package app
 
 import (
