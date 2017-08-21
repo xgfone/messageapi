@@ -98,6 +98,8 @@ func main() {
 	}
 
 	// Send the email with the attachment for the second way.
+	// The key is the path of the file, and the provider will open and read it.
+	// The name of the attachment is same as filepath.Base(key).
 	attachment2 := map[string]io.Reader{
 		"test.txt": nil,
 	}
