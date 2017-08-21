@@ -13,6 +13,10 @@
 // use the specific one.
 //
 // For GET, the arguments above are in the url query, but not "attachments".
+//
+// Besides, the package also registers a url by default: "/v1/config". You can
+// visit it to get the configuration information by "GET", or modify it by "POST".
+// The format is json.
 package app
 
 import (
@@ -23,6 +27,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/golang/glog"
 	"github.com/xgfone/messageapi"
@@ -32,23 +37,26 @@ import (
 type Config struct {
 	// If true, allow to use the GET method to send the message.
 	// The default is false.
-	AllowGet bool
+	AllowGet bool `json:"allow_get"`
 
 	// The name of the default sms provider, which is used when it is not given
 	// in the request. It's best to give a default provider.
-	DefaultSMSProvider string
+	DefaultSMSProvider string `json:"default_sms_provider,omitempty"`
 
 	// The name of the default email provider, which is used when it is not given
 	// in the request. It's best to give a default provider.
-	DefaultEmailProvider string
+	DefaultEmailProvider string `json:"default_email_provider,omitempty"`
 
 	// The configuration of all the email providers. The key is the name of the
 	// provider, and the value is its configuration information.
-	Emails map[string]map[string]string
+	Emails map[string]map[string]string `json:"emails,omitempty"`
 
 	// The configuration of all the sms providers. The key is the name of the
 	// provider, and the value is its configuration information.
-	SMSes map[string]map[string]string
+	SMSes map[string]map[string]string `json:"smses,omitempty"`
+
+	emails map[string]messageapi.Email
+	smses  map[string]messageapi.SMS
 }
 
 // NewDefaultConfig returns a default configuration.
@@ -87,10 +95,8 @@ const (
 )
 
 var (
-	config *Config
-
-	emails map[string]messageapi.Email
-	smses  map[string]messageapi.SMS
+	configLocker *sync.Mutex
+	config       *Config
 )
 
 type request interface {
@@ -148,14 +154,18 @@ func (s *smsRequest) Validate() error {
 }
 
 func init() {
+	configLocker = new(sync.Mutex)
 	ResetConfig(NewDefaultConfig())
 	http.HandleFunc("/v1/email", sendEmail)
 	http.HandleFunc("/v1/sms", sendSMS)
+	http.HandleFunc("/v1/config", resetConfig)
 }
 
 // ResetConfig resets the global default configuration.
 //
 // Only use this function when you don't call Start and implement it youself.
+//
+// Notice: You can call this function to change the configuration at any time.
 func ResetConfig(conf *Config) error {
 	_emails := make(map[string]messageapi.Email)
 	for n, c := range conf.Emails {
@@ -183,24 +193,150 @@ func ResetConfig(conf *Config) error {
 		_smses[n] = provider
 	}
 
-	emails = _emails
-	smses = _smses
+	conf.emails = _emails
+	conf.smses = _smses
+	configLocker.Lock()
 	config = conf
+	configLocker.Unlock()
 	return nil
 }
 
 func getEmail(name string) messageapi.Email {
-	if e, ok := emails[name]; ok {
+	configLocker.Lock()
+	_config := config
+	configLocker.Unlock()
+	if e, ok := _config.emails[name]; ok {
 		return e
 	}
 	return nil
 }
 
 func getSMS(name string) messageapi.SMS {
-	if e, ok := smses[name]; ok {
+	configLocker.Lock()
+	_config := config
+	configLocker.Unlock()
+	if e, ok := _config.smses[name]; ok {
 		return e
 	}
 	return nil
+}
+
+func resetConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		configLocker.Lock()
+		_config := config
+		configLocker.Unlock()
+
+		if content, err := json.Marshal(_config); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(content)
+		}
+	} else if r.Method == "POST" {
+		buf := bytes.NewBuffer(nil)
+		if _, err := buf.ReadFrom(r.Body); err != nil {
+			glog.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		_conf := make(map[string]interface{})
+		if err := json.Unmarshal(buf.Bytes(), &_conf); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			return
+		}
+
+		conf := new(Config)
+		if _v, ok := _conf["allow_get"]; ok {
+			if v, ok := _v.(bool); ok {
+				conf.AllowGet = v
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("the type of allow_get is wrong"))
+				return
+			}
+		}
+		if _v, ok := _conf["default_email_provider"]; ok {
+			if v, ok := _v.(string); ok {
+				conf.DefaultEmailProvider = v
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("the type of default_email_provider is wrong"))
+				return
+			}
+		}
+		if _v, ok := _conf["default_sms_provider"]; ok {
+			if v, ok := _v.(string); ok {
+				conf.DefaultSMSProvider = v
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("the type of default_sms_provider is wrong"))
+				return
+			}
+		}
+		if _v, ok := _conf["emails"]; ok {
+			m, ok := _v.(map[string]interface{})
+			if !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("the type of emails is wrong"))
+				return
+			}
+
+			conf.Emails = make(map[string]map[string]string)
+			for key, value := range m {
+				v, ok := value.(map[string]interface{})
+				if !ok {
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte("the type of the value of emails is wrong"))
+					return
+				}
+
+				if _v, ok := toStringMap(v); ok {
+					conf.Emails[key] = _v
+				} else {
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte("the type of the value of emails is wrong"))
+					return
+				}
+			}
+		}
+		if _v, ok := _conf["smses"]; ok {
+			m, ok := _v.(map[string]interface{})
+			if !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte("the type of smses is wrong"))
+				return
+			}
+
+			conf.SMSes = make(map[string]map[string]string)
+			for key, value := range m {
+				v, ok := value.(map[string]interface{})
+				if !ok {
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte("the type of the value of smses is wrong"))
+					return
+				}
+
+				if _v, ok := toStringMap(v); ok {
+					conf.SMSes[key] = _v
+				} else {
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte("the type of the value of emails is wrong"))
+					return
+				}
+			}
+		}
+
+		if err := ResetConfig(conf); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+		}
+	} else {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func sendEmail(w http.ResponseWriter, r *http.Request) {
@@ -253,11 +389,15 @@ func sendSMS(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (args request) {
+	configLocker.Lock()
+	_config := config
+	configLocker.Unlock()
+
 	var ok bool
 	if isEmail {
-		ok = len(emails) > 0
+		ok = len(_config.emails) > 0
 	} else {
-		ok = len(smses) > 0
+		ok = len(_config.smses) > 0
 	}
 	if !ok {
 		w.WriteHeader(http.StatusNotImplemented)
@@ -284,7 +424,7 @@ func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (ar
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-	} else if config.AllowGet && r.Method == "GET" {
+	} else if _config.AllowGet && r.Method == "GET" {
 		if err := r.ParseForm(); err != nil {
 			glog.Error(err)
 			w.WriteHeader(http.StatusBadRequest)
@@ -312,8 +452,8 @@ func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (ar
 	}
 
 	if provider == "" {
-		if config.DefaultEmailProvider != "" {
-			args.SetProvider(config.DefaultEmailProvider)
+		if _config.DefaultEmailProvider != "" {
+			args.SetProvider(_config.DefaultEmailProvider)
 		} else {
 			args.SetProvider(defaultEmailProvider)
 		}
@@ -325,4 +465,20 @@ func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (ar
 		return nil
 	}
 	return
+}
+
+func toStringMap(v map[string]interface{}) (map[string]string, bool) {
+	if len(v) == 0 {
+		return nil, true
+	}
+
+	vs := make(map[string]string, len(v))
+	for _k, _v := range v {
+		s, ok := _v.(string)
+		if !ok {
+			return nil, false
+		}
+		vs[_k] = s
+	}
+	return vs, true
 }
