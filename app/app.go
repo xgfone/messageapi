@@ -3,16 +3,13 @@
 // The package registers two urls by default: "/v1/email" and "/v1/sms".
 // You can use them to send the email or the sms messagr. Both two apis support
 // the POST method, not GET, which can be enabled by setting `Config.AllowGet`
-// to trur.
+// to true.
 //
 // For POST, the arguments are in body, type of which is "application/json".
-// Email needs "subject", "content", "to", "attachments", "provider", and SMS
-// needs "phone", "content", "provider". Thereinto, "content", "attachments",
-// and "provider" are optional. In most cases, there is no need to use "provider".
-// You maybe only use it when there are more than one provider and you want to
-// use the specific onr.
 //
 // For GET, the arguments above are in the url query, but not "attachments".
+//
+// About the arguments, see the struct Request.
 //
 // Besides, the package also registers a url by default: "/v1/config". You can
 // visit it to get the configuration information by "GET", or modify it by "POST".
@@ -26,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -68,27 +66,48 @@ func Start(c *Config, addr, certFile, keyFile string) error {
 	return http.ListenAndServeTLS(addr, certFile, keyFile, nil)
 }
 
-func getEmail(name string) messageapi.Email {
+func getEmail(name string) []messageapi.Email {
 	configLocker.Lock()
 	_config := config
 	configLocker.Unlock()
-	if e, ok := _config.emails[name]; ok {
-		return e
+
+	if name == "all" {
+		results := make([]messageapi.Email, 0, len(_config.emails))
+		for _, v := range _config.emails {
+			results = append(results, v)
+		}
+		return results
+	} else if e, ok := _config.emails[name]; ok {
+		return []messageapi.Email{e}
 	}
 	return nil
 }
 
-func getSMS(name string) messageapi.SMS {
+func getSMS(name string) []messageapi.SMS {
 	configLocker.Lock()
 	_config := config
 	configLocker.Unlock()
-	if e, ok := _config.smses[name]; ok {
-		return e
+
+	if name == "all" {
+		results := make([]messageapi.SMS, 0, len(_config.smses))
+		for _, v := range _config.smses {
+			results = append(results, v)
+		}
+		return results
+	} else if s, ok := _config.smses[name]; ok {
+		return []messageapi.SMS{s}
 	}
 	return nil
 }
 
 func resetConfig(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}()
+
 	configLocker.Lock()
 	_config := config
 	configLocker.Unlock()
@@ -145,21 +164,53 @@ func resetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type request struct {
-	Provider    string            `json:"provider"`
-	Phone       string            `json:"phone"`
+// Request is the arguments to send the email or sms.
+type Request struct {
+	// If the provider is "all", try to send the message by the all providers
+	// in order until a certain provider sent successfully or all the providers
+	// have tried.
+	//
+	// If the option is not given, use the default in the server configuration.
+	Provider string `json:"provider"`
+
+	// When sending the sms, use this option, which must be given out.
+	Phone string `json:"phone"`
+
+	// When sending the email or sms, both use this option.
+	// If the option is not given, the default is empty.
+	Content string `json:"content"`
+
+	// When sending the email, use these options. Thereinto, "subject" and "to"
+	// must be given out, but "attachments" not.
 	Subject     string            `json:"subject"`
-	Content     string            `json:"content"`
 	To          string            `json:"to"`
 	Attachments map[string]string `json:"attachments"`
+
+	// Try to send the message for N times until a certain time is successful.
+	// The default is not to retry.
+	//
+	// If the provider is "all", ignore the option.
+	Retry int `json:"retry"`
 
 	tos         []string
 	attachments map[string]io.Reader
 }
 
-func (r *request) ValidateEmail() error {
+func (r *Request) validate() error {
 	if r.Provider == "" {
 		return fmt.Errorf("the provider is empty")
+	}
+
+	if r.Retry < 0 {
+		r.Retry = 0
+	}
+
+	return nil
+}
+
+func (r *Request) validateEmail() error {
+	if err := r.validate(); err != nil {
+		return err
 	} else if r.To == "" {
 		return fmt.Errorf("the to is empty")
 	} else if r.Subject == "" {
@@ -178,9 +229,9 @@ func (r *request) ValidateEmail() error {
 	return nil
 }
 
-func (r *request) ValidateSMS() error {
-	if r.Provider == "" {
-		return fmt.Errorf("the provider is empty")
+func (r *Request) validateSMS() error {
+	if err := r.validate(); err != nil {
+		return err
 	} else if r.Phone == "" {
 		return fmt.Errorf("the phone is empty")
 	}
@@ -189,50 +240,96 @@ func (r *request) ValidateSMS() error {
 }
 
 func sendEmail(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}()
+
 	args := handleRequestArgs(true, w, r)
 	if args == nil {
 		return
 	}
 
-	email := getEmail(args.Provider)
-	if email == nil {
+	emails := getEmail(args.Provider)
+	if emails == nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(fmt.Sprintf("have no the email provider[%s]", args.Provider)))
 		return
 	}
 
-	err := email.SendEmail(context.TODO(), args.tos, args.Subject, args.Content, args.attachments)
+	var err error
+	if args.Provider == "all" {
+		for _, email := range emails {
+			if err = email.SendEmail(context.TODO(), args.tos, args.Subject,
+				args.Content, args.attachments); err == nil {
+				return
+			}
+			glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+		}
+	} else if args.Retry >= 0 {
+		if err = emails[0].SendEmail(context.TODO(), args.tos, args.Subject,
+			args.Content, args.attachments); err == nil {
+			return
+		}
+		args.Retry--
+		glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+	}
+
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		if _, err := w.Write([]byte(err.Error())); err != nil {
+		if _, err = w.Write([]byte(err.Error())); err != nil {
 			glog.Error(err)
 		}
 	}
 }
 
 func sendSMS(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if err := recover(); err != nil {
+			glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}()
+
 	args := handleRequestArgs(false, w, r)
 	if args == nil {
 		return
 	}
 
-	sms := getSMS(args.Provider)
-	if sms == nil {
+	smses := getSMS(args.Provider)
+	if smses == nil {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(fmt.Sprintf("have no the sms provider[%s]", args.Provider)))
 		return
 	}
 
-	err := sms.SendSMS(context.TODO(), args.Phone, args.Content)
+	var err error
+	if args.Provider == "all" {
+		for _, sms := range smses {
+			if err = sms.SendSMS(context.TODO(), args.Phone, args.Content); err == nil {
+				return
+			}
+			glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+		}
+	} else if args.Retry >= 0 {
+		if err = smses[0].SendSMS(context.TODO(), args.Phone, args.Content); err == nil {
+			return
+		}
+		args.Retry--
+		glog.Errorf("path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
+	}
+
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		if _, err := w.Write([]byte(err.Error())); err != nil {
+		if _, err = w.Write([]byte(err.Error())); err != nil {
 			glog.Error(err)
 		}
 	}
 }
 
-func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (args *request) {
+func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (args *Request) {
 	configLocker.Lock()
 	_config := config
 	configLocker.Unlock()
@@ -255,7 +352,7 @@ func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (ar
 			w.Write([]byte(fmt.Sprintf("cannot read the body, err=%s", err)))
 			return
 		}
-		args = new(request)
+		args = new(Request)
 
 		if err := json.Unmarshal(buf.Bytes(), args); err != nil {
 			glog.Errorf("the path %s from %s: %s", r.URL.Path, r.RemoteAddr, err)
@@ -269,12 +366,23 @@ func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (ar
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		args := new(request)
+		args = new(Request)
 		args.Provider = r.FormValue("provider")
 		args.Subject = r.FormValue("subject")
 		args.Content = r.FormValue("content")
 		args.To = r.FormValue("to")
 		args.Phone = r.FormValue("phone")
+
+		retry := r.FormValue("retry")
+		if retry != "" {
+			n, err := strconv.ParseInt(retry, 10, 32)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(err.Error()))
+				return nil
+			}
+			args.Retry = int(n)
+		}
 	} else {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -298,9 +406,9 @@ func handleRequestArgs(isEmail bool, w http.ResponseWriter, r *http.Request) (ar
 
 	var err error
 	if isEmail {
-		err = args.ValidateEmail()
+		err = args.validateEmail()
 	} else {
-		err = args.ValidateSMS()
+		err = args.validateSMS()
 	}
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)

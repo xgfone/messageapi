@@ -64,11 +64,11 @@ func main() {
 
 	// Load the configuration only once.
 	config := map[string]string{
-		"host":     "mail.grandcloud.cn",
+		"host":     "mail.example.com",
 		"port":     "25",
-		"username": "xiegaofeng",
-		"password": "XieGaoFeng",
-		"from":     "xiegaofeng@grandcloud.cn",
+		"username": "username",
+		"password": "password",
+		"from":     "username@example.com",
 	}
 	if err := email.Load(config); err != nil {
 		fmt.Println(err)
@@ -76,7 +76,7 @@ func main() {
 	}
 
 	// Send the email without the attachment.
-	to := "xiegaofeng@grandcloud.cn"
+	to := "username@example.com"
 	subject := "test"
 	content := "test email send"
 	if err := email.SendEmail(context.TODO(), []string{to}, subject, content, nil); err != nil {
@@ -129,7 +129,7 @@ import (
 
 func main() {
 	flag.Parse()
-	c := app.NewDefaultConfig()
+	c := app.NewDefaultConfig("")
 	c.AllowGet = true // Allow to use the GET method to send the message
 	c.Emails = map[string]map[string]string{
 		"plain": map[string]string{
