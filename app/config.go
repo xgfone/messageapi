@@ -39,6 +39,9 @@ type Config struct {
 
 // NewDefaultConfig returns a default configuration.
 //
+// If the key is not empty, it must be given and matched when resetting the
+// configuration by the HTTP API; or the configuration is not allowed to be reset.
+//
 // DefaultEmailProvider is "plain" by default.
 func NewDefaultConfig(key string) *Config {
 	return &Config{
@@ -52,6 +55,8 @@ func NewDefaultConfig(key string) *Config {
 // Only use this function when you don't call Start and implement it youself.
 //
 // Notice: You can call this function to change the configuration at any time.
+// And it's necessary to give the whole configuration options When resetting
+// the configuration.
 func ResetConfig(conf *Config) error {
 	if conf == nil {
 		return nil

@@ -13,7 +13,8 @@
 //
 // Besides, the package also registers a url by default: "/v1/config". You can
 // visit it to get the configuration information by "GET", or modify it by "POST".
-// The format is json.
+// The format is json. When resetting the configuration, it's necessary to give
+// the whole configuration options.
 package app
 
 import (
